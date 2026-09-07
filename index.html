@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0e141b">
+<title>Bin fill — CSGME</title>
+<style>
+  :root{
+    --ink:#0e141b;        /* body */
+    --steel:#18222d;      /* panel */
+    --line:#2a3946;
+    --paper:#e9eef3;
+    --muted:#8496a5;
+    --floor:#2ec69b;      /* visible floor */
+    --stock:#f0a01e;      /* stock on the floor */
+    --alert:#ef4444;
+    --edge:#38bdf8;       /* measuring area */
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--ink);color:var(--paper);
+    font:400 15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    display:flex;flex-direction:column;overflow:hidden;
+    padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+
+  /* ---- stage: the camera view is the hero --------------------------- */
+  .stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;background:#070b0f;min-height:0}
+  #view{max-width:100%;max-height:100%;display:block;touch-action:none}
+  .hint{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:min(300px,80%);text-align:center;color:var(--muted);
+  }
+  .hint b{display:block;color:var(--paper);font-weight:600;margin-bottom:6px}
+
+  .tag{
+    position:absolute;top:10px;left:12px;display:flex;align-items:baseline;gap:8px;
+    background:rgba(14,20,27,.72);border:1px solid var(--line);border-radius:4px;
+    padding:5px 9px;backdrop-filter:blur(4px);
+  }
+  .tag input{
+    background:none;border:0;color:var(--paper);font:600 15px/1 inherit;width:9ch;padding:0;
+  }
+  .tag input:focus{outline:0;border-bottom:1px solid var(--edge)}
+  .tag span{color:var(--muted);font-size:12px}
+
+  /* ---- gauge: the one bold element ---------------------------------- */
+  .panel{background:var(--steel);border-top:1px solid var(--line);padding:14px 16px 12px}
+
+  .gauge{position:relative;height:52px;margin:2px 0 6px}
+  .track{position:absolute;left:0;right:0;top:34px;height:6px;border-radius:3px;background:#22303d;overflow:hidden}
+  .fill{position:absolute;inset:0 auto 0 0;width:0;background:var(--floor);transition:width .18s linear}
+  .mark{position:absolute;top:26px;width:1px;height:22px;background:var(--muted)}
+  .mark::after{
+    content:attr(data-label);position:absolute;top:24px;left:50%;transform:translateX(-50%);
+    font-size:11px;color:var(--muted);white-space:nowrap;
+  }
+  .needle{position:absolute;top:0;transform:translateX(-50%);text-align:center;transition:left .18s linear}
+  .needle b{font:600 30px/1 "Roboto Condensed","Helvetica Neue",system-ui,sans-serif;letter-spacing:-.01em}
+  .needle i{display:block;width:1px;height:12px;margin:2px auto 0;background:currentColor;font-style:normal}
+  .scale{position:absolute;left:0;right:0;top:46px;display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+
+  .trend{width:100%;height:22px;display:block;margin:14px 0 10px}
+
+  .verdict{display:flex;align-items:center;gap:9px;font-size:14px;min-height:22px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--floor);flex:none}
+  .verdict.hot .dot{background:var(--alert)}
+  .verdict.hot{color:var(--alert)}
+  .verdict small{color:var(--muted);font-size:13px}
+  @media (prefers-reduced-motion:no-preference){
+    .verdict.hot .dot{animation:beat 1.6s ease-in-out infinite}
+  }
+  @keyframes beat{50%{opacity:.35}}
+
+  /* ---- controls ------------------------------------------------------ */
+  .row{display:flex;gap:8px;margin-top:12px}
+  button,label.btn{
+    flex:1;min-height:44px;padding:9px 6px;border-radius:5px;
+    background:#22303d;color:var(--paper);border:1px solid var(--line);
+    font:500 13px/1.2 inherit;cursor:pointer;text-align:center;
+  }
+  button:active,label.btn:active{background:#2c3d4c}
+  button[aria-pressed="true"]{border-color:var(--edge);color:var(--edge)}
+  button:focus-visible,label.btn:focus-within{outline:2px solid var(--edge);outline-offset:2px}
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
+
+  .tune{display:flex;align-items:center;gap:12px;margin-top:12px;font-size:13px;color:var(--muted)}
+  .tune input[type=range]{flex:1;accent-color:var(--edge);height:28px}
+  .tune output{color:var(--paper);font-variant-numeric:tabular-nums;width:4ch;text-align:right}
+
+  .foot{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:11px;color:#5d6f7e}
+  .keys{display:flex;gap:12px}
+  .keys em{font-style:normal;display:flex;align-items:center;gap:5px}
+  .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <canvas id="view" width="720" height="960"></canvas>
+  <div class="hint" id="hint">
+    <b>Point the camera into a bin</b>
+    Or load one of your bin photos. Live camera needs the page served over https.
+  </div>
+  <div class="tag">
+    <input id="binName" value="SHCS M8x20" aria-label="Container name" spellcheck="false">
+    <span>free issue</span>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="gauge">
+    <div class="mark" id="mark" data-label="reorder"></div>
+    <div class="track"><div class="fill" id="fill"></div></div>
+    <div class="needle" id="needle" style="left:0"><b id="pct">—</b><i></i></div>
+    <div class="scale"><span>full bin</span><span>bare floor</span></div>
+  </div>
+
+  <canvas class="trend" id="trend" width="600" height="44" aria-hidden="true"></canvas>
+
+  <div class="verdict" id="verdict">
+    <span class="dot"></span><span id="verdictText">Waiting for a picture of the bin.</span>
+  </div>
+
+  <div class="row">
+    <button id="btnSample" aria-pressed="false">Sample bin colour</button>
+    <button id="btnFreeze" aria-pressed="false">Hold</button>
+    <label class="btn">Use a photo<input type="file" id="file" accept="image/*"></label>
+  </div>
+
+  <div class="tune">
+    <label for="thr">Reorder when floor showing</label>
+    <input type="range" id="thr" min="25" max="90" value="60">
+    <output id="thrOut">60%</output>
+  </div>
+
+  <div class="foot">
+    <div class="keys">
+      <em><i class="sw" style="background:var(--floor)"></i>floor</em>
+      <em><i class="sw" style="background:var(--stock)"></i>stock</em>
+      <em><i class="sw" style="background:var(--edge)"></i>measuring area</em>
+    </div>
+    <span>CSGME</span>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   Bin fill — floor-visibility measurement, ported from bin_fill.py
+   Everything runs on the phone. No network, no upload, no model.
+   ===================================================================== */
+
+const CFG = {
+  workH:        300,      // analysis resolution (px tall)
+  hueCenter:    0,        // red bin by default; retuned by "Sample bin colour"
+  hueTol:       14,       // hue is 0..179, as in OpenCV
+  minSat:       45,
+  minVal:       50,
+  sheenVal:     190,      // wet/oily highlight is still floor
+  sheenSat:     70,
+  minBlob:      0.0012,   // fraction of area: smaller than this is noise
+  maxHole:      0.0022,   // fraction of area: smaller holes get filled
+  rOpen:      7/1300,     // kernel sizes as a fraction of image height,
+  rClose:    13/1300,     // so they hold at any working resolution
+  rBridge:   55/1300,
+  threshold:    60,       // % floor showing before a restock is raised
+  debounce:     3,        // consecutive readings before the call is made
+  ema:          0.35
+};
+
+/* ---------- geometry helpers ---------------------------------------- */
+const oddK = f => { const k = Math.max(3, Math.round(f)); return k % 2 ? k : k + 1; };
+
+function pointInPoly(px, py, q){          // even-odd, so any 4-gon works
+  let inside = false;
+  for (let i = 0, j = 3; i < 4; j = i++){
+    const xi = q[i].x, yi = q[i].y, xj = q[j].x, yj = q[j].y;
+    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/* ---------- morphology: rectangular kernels are separable ------------ */
+function morph(src, w, h, k, wantMax){
+  const r = (k - 1) >> 1, tmp = new Uint8Array(w * h), out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++){
+    const row = y * w;
+    for (let x = 0; x < w; x++){
+      let m = wantMax ? 0 : 1;
+      const a = Math.max(0, x - r), b = Math.min(w - 1, x + r);
+      for (let i = a; i <= b; i++){
+        const v = src[row + i];
+        if (wantMax ? v > m : v < m){ m = v; break; }
+      }
+      tmp[row + x] = m;
+    }
+  }
+  for (let x = 0; x < w; x++){
+    for (let y = 0; y < h; y++){
+      let m = wantMax ? 0 : 1;
+      const a = Math.max(0, y - r), b = Math.min(h - 1, y + r);
+      for (let i = a; i <= b; i++){
+        const v = tmp[i * w + x];
+        if (wantMax ? v > m : v < m){ m = v; break; }
+      }
+      out[y * w + x] = m;
+    }
+  }
+  return out;
+}
+const erode  = (s,w,h,k) => morph(s,w,h,k,false);
+const dilate = (s,w,h,k) => morph(s,w,h,k,true);
+const open   = (s,w,h,k) => dilate(erode(s,w,h,k),w,h,k);
+const close  = (s,w,h,k) => erode(dilate(s,w,h,k),w,h,k);
+
+/* ---------- connected components (flood fill) ------------------------ */
+function label(mask, w, h, roi){
+  const lab = new Int32Array(w * h), comps = [{area:0, edge:false}];
+  const stack = new Int32Array(w * h);
+  for (let p = 0; p < w * h; p++){
+    if (!mask[p] || lab[p]) continue;
+    const id = comps.length; comps.push({area:0, edge:false});
+    let sp = 0; stack[sp++] = p; lab[p] = id;
+    while (sp){
+      const q = stack[--sp], x = q % w, y = (q / w) | 0;
+      comps[id].area++;
+      const n = [x > 0 ? q-1 : -1, x < w-1 ? q+1 : -1, y > 0 ? q-w : -1, y < h-1 ? q+w : -1];
+      for (const nb of n){
+        if (nb < 0){ comps[id].edge = true; continue; }
+        if (roi && !roi[nb]){ comps[id].edge = true; continue; }
+        if (mask[nb] && !lab[nb]){ lab[nb] = id; stack[sp++] = nb; }
+      }
+    }
+  }
+  return {lab, comps};
+}
+
+/* ---------- the measurement ------------------------------------------ */
+function measure(px, w, h, roi, roiArea){
+  const n = w * h;
+  const H = new Uint8Array(n), S = new Uint8Array(n), V = new Uint8Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    const r = px[j], g = px[j+1], b = px[j+2];
+    const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    const d = mx - mn;
+    let hh = 0;
+    if (d){
+      if (mx === r)      hh = 30 * (((g - b) / d) % 6);
+      else if (mx === g) hh = 30 * ((b - r) / d + 2);
+      else               hh = 30 * ((r - g) / d + 4);
+      if (hh < 0) hh += 180;
+    }
+    H[i] = hh; S[i] = mx ? (255 * d / mx) : 0; V[i] = mx;
+  }
+
+  // floor: the bin's own colour, plus specular highlights off oily plastic
+  let parts = new Uint8Array(n);
+  for (let i = 0; i < n; i++){
+    if (!roi[i]) continue;
+    let dh = Math.abs(H[i] - CFG.hueCenter); if (dh > 90) dh = 180 - dh;
+    const isFloor = (dh <= CFG.hueTol && S[i] > CFG.minSat && V[i] > CFG.minVal) ||
+                    (V[i] > CFG.sheenVal && S[i] < CFG.sheenSat);
+    if (!isFloor) parts[i] = 1;
+  }
+
+  parts = open(parts, w, h, oddK(CFG.rOpen * h));
+  parts = close(parts, w, h, oddK(CFG.rClose * h));
+  for (let i = 0; i < n; i++) parts[i] &= roi[i];
+
+  // drop speckle
+  const blobs = label(parts, w, h, roi);
+  for (let i = 0; i < n; i++) if (parts[i] && blobs.comps[blobs.lab[i]].area < roiArea * CFG.minBlob) parts[i] = 0;
+
+  // close gaps between bolts that aren't really floor
+  const holeMask = new Uint8Array(n);
+  for (let i = 0; i < n; i++) holeMask[i] = roi[i] && !parts[i] ? 1 : 0;
+  const holes = label(holeMask, w, h, roi);
+  for (let i = 0; i < n; i++){
+    if (!holeMask[i]) continue;
+    const c = holes.comps[holes.lab[i]];
+    if (c.area < roiArea * CFG.maxHole && !c.edge) parts[i] = 1;
+  }
+
+  let stock = 0;
+  for (let i = 0; i < n; i++) if (parts[i]) stock++;
+  const foot = close(parts, w, h, oddK(CFG.rBridge * h));
+
+  return {parts, foot, H, S, V, exposed: 100 * (roiArea - stock) / roiArea};
+}
+
+/* ---------- paint the classification over the frame ------------------ */
+function paint(img, w, h, roi, parts, foot){
+  const d = img.data;
+  for (let i = 0, j = 0; i < w * h; i++, j += 4){
+    if (!roi[i]){ d[j]=0; d[j+1]=0; d[j+2]=0; d[j+3]=70; continue; }   // dim what isn't measured
+    const edge = foot[i] && (
+      (i % w === 0 || !foot[i-1]) || (i % w === w-1 || !foot[i+1]) ||
+      (i < w || !foot[i-w]) || (i >= w*(h-1) || !foot[i+w]));
+    if (edge){ d[j]=240; d[j+1]=160; d[j+2]=30; d[j+3]=255; }
+    else if (parts[i]){ d[j]=240; d[j+1]=160; d[j+2]=30; d[j+3]=120; }
+    else { d[j]=46; d[j+1]=198; d[j+2]=155; d[j+3]=110; }
+  }
+  return img;
+}
+
+/* =====================================================================
+   App
+   ===================================================================== */
+const view   = document.getElementById('view');
+const vctx   = view.getContext('2d');
+const snap   = document.createElement('canvas');   // last frame, full size
+const sctx   = snap.getContext('2d', {willReadFrequently:true});
+const work   = document.createElement('canvas');   // analysis size
+const wctx   = work.getContext('2d', {willReadFrequently:true});
+const over   = document.createElement('canvas');   // classification layer
+const octx   = over.getContext('2d');
+
+const el = id => document.getElementById(id);
+const S = {
+  source:null, mode:'idle', frozen:false, dirty:true,
+  quad:[{x:.20,y:.14},{x:.80,y:.14},{x:.80,y:.88},{x:.20,y:.88}],
+  roi:null, roiArea:0, roiKey:'', drag:-1, sampling:false,
+  last:null, smooth:null, streak:0, history:[], t:0
+};
+
+try{ const q = JSON.parse(localStorage.getItem('binQuad')); if (q && q.length === 4) S.quad = q; }catch(e){}
+const saveQuad = () => { try{ localStorage.setItem('binQuad', JSON.stringify(S.quad)); }catch(e){} };
+
+/* ---- camera ---------------------------------------------------------- */
+const video = document.createElement('video');
+video.playsInline = true; video.muted = true;
+
+async function startCamera(){
+  if (!navigator.mediaDevices?.getUserMedia) return false;
+  try{
+    video.srcObject = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:960}}, audio:false});
+    await video.play();
+    S.source = video; S.mode = 'live'; el('hint').style.display = 'none';
+    return true;
+  }catch(e){ return false; }
+}
+startCamera().then(ok => { if (!ok) el('hint').firstElementChild.textContent = 'Camera not available here'; });
+
+el('file').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => { S.source = img; S.mode = 'still'; S.dirty = true; el('hint').style.display = 'none'; };
+  img.src = URL.createObjectURL(f);
+});
+
+/* ---- region of interest --------------------------------------------- */
+function buildRoi(w, h){
+  const key = w + 'x' + h + JSON.stringify(S.quad);
+  if (S.roiKey === key) return;
+  const q = S.quad.map(p => ({x:p.x * w, y:p.y * h}));
+  const roi = new Uint8Array(w * h); let area = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++)
+    if (pointInPoly(x + .5, y + .5, q)){ roi[y*w + x] = 1; area++; }
+  S.roi = roi; S.roiArea = Math.max(1, area); S.roiKey = key; S.dirty = true;
+}
+
+/* ---- main loop ------------------------------------------------------- */
+function frameSize(){
+  const s = S.source;
+  return s === video ? [video.videoWidth, video.videoHeight] : [s.naturalWidth, s.naturalHeight];
+}
+
+function loop(ts){
+  requestAnimationFrame(loop);
+  if (!S.source) return;
+  const [fw, fh] = frameSize(); if (!fw) return;
+
+  if (snap.width !== fw){ snap.width = fw; snap.height = fh; S.dirty = true; }
+  if (!S.frozen && (S.mode === 'live' || S.dirty)) sctx.drawImage(S.source, 0, 0, fw, fh);
+
+  const due = S.mode === 'live' ? (!S.frozen && ts - S.t > 130) : S.dirty;
+  if (due){ S.t = ts; S.dirty = false; analyse(fw, fh); }
+  draw(fw, fh);
+}
+
+function analyse(fw, fh){
+  const wh = CFG.workH, ww = Math.max(8, Math.round(fw * wh / fh));
+  if (work.width !== ww){ work.width = over.width = ww; work.height = over.height = wh; }
+  wctx.drawImage(snap, 0, 0, ww, wh);
+  buildRoi(ww, wh);
+
+  const img = wctx.getImageData(0, 0, ww, wh);
+  const m = measure(img.data, ww, wh, S.roi, S.roiArea);
+  S.last = m;
+  octx.putImageData(paint(img, ww, wh, S.roi, m.parts, m.foot), 0, 0);
+
+  S.smooth = S.smooth === null ? m.exposed : S.smooth + CFG.ema * (m.exposed - S.smooth);
+  S.streak = S.smooth > CFG.threshold ? S.streak + 1 : 0;
+  S.history.push(S.smooth); if (S.history.length > 140) S.history.shift();
+  report();
+}
+
+function draw(fw, fh){
+  const cap = 820, sc = Math.min(1, cap / fw);
+  if (view.width !== Math.round(fw * sc)){ view.width = Math.round(fw * sc); view.height = Math.round(fh * sc); }
+  vctx.drawImage(snap, 0, 0, view.width, view.height);
+  if (S.last) vctx.drawImage(over, 0, 0, view.width, view.height);
+
+  const q = S.quad.map(p => ({x:p.x * view.width, y:p.y * view.height}));
+  vctx.save();
+  vctx.strokeStyle = '#38bdf8'; vctx.lineWidth = Math.max(2, view.width/340);
+  vctx.setLineDash([10, 8]); vctx.beginPath();
+  q.forEach((p, i) => i ? vctx.lineTo(p.x, p.y) : vctx.moveTo(p.x, p.y));
+  vctx.closePath(); vctx.stroke(); vctx.setLineDash([]);
+  vctx.fillStyle = '#38bdf8';
+  for (const p of q){ vctx.beginPath(); vctx.arc(p.x, p.y, Math.max(7, view.width/70), 0, 7); vctx.fill(); }
+  vctx.restore();
+}
+requestAnimationFrame(loop);
+
+/* ---- readout --------------------------------------------------------- */
+function report(){
+  const pct = Math.round(S.smooth);
+  el('pct').textContent = pct + '%';
+  el('fill').style.width = pct + '%';
+  el('needle').style.left = pct + '%';
+  const hot = S.streak >= CFG.debounce;
+  el('needle').style.color = hot ? 'var(--alert)' : 'var(--paper)';
+  el('fill').style.background = hot ? 'var(--alert)' : 'var(--floor)';
+  const v = el('verdict'); v.classList.toggle('hot', hot);
+  el('verdictText').innerHTML = hot
+    ? 'Restock ' + el('binName').value + ' — <small>floor showing past ' + CFG.threshold + '% for ' + S.streak + ' readings</small>'
+    : 'Enough for now — <small>' + Math.round(100 - S.smooth) + '% of the floor still covered</small>';
+  trend();
+}
+
+function trend(){
+  const c = el('trend'), x = c.getContext('2d');
+  const w = c.width, h = c.height;
+  x.clearRect(0, 0, w, h);
+  x.strokeStyle = '#2a3946'; x.lineWidth = 1;
+  const ty = h - h * CFG.threshold / 100;
+  x.setLineDash([3, 4]); x.beginPath(); x.moveTo(0, ty); x.lineTo(w, ty); x.stroke(); x.setLineDash([]);
+  if (S.history.length < 2) return;
+  x.strokeStyle = S.streak >= CFG.debounce ? '#ef4444' : '#2ec69b'; x.lineWidth = 2;
+  x.beginPath();
+  S.history.forEach((v, i) => {
+    const px = w * i / (S.history.length - 1), py = h - h * v / 100;
+    i ? x.lineTo(px, py) : x.moveTo(px, py);
+  });
+  x.stroke();
+}
+
+/* ---- touch: drag the corners, or sample the bin colour --------------- */
+function canvasPt(e){
+  const r = view.getBoundingClientRect();
+  return {x:(e.clientX - r.left) * view.width / r.width, y:(e.clientY - r.top) * view.height / r.height};
+}
+
+view.addEventListener('pointerdown', e => {
+  if (!S.source) return;
+  const p = canvasPt(e);
+  if (S.sampling){ sample(p); return; }
+  const grab = Math.max(26, view.width / 22);
+  let best = -1, bd = grab;
+  S.quad.forEach((q, i) => {
+    const d = Math.hypot(q.x * view.width - p.x, q.y * view.height - p.y);
+    if (d < bd){ bd = d; best = i; }
+  });
+  if (best >= 0){ S.drag = best; view.setPointerCapture(e.pointerId); }
+});
+view.addEventListener('pointermove', e => {
+  if (S.drag < 0) return;
+  const p = canvasPt(e);
+  S.quad[S.drag] = {x:Math.min(1, Math.max(0, p.x / view.width)), y:Math.min(1, Math.max(0, p.y / view.height))};
+  S.roiKey = ''; S.dirty = true;
+});
+view.addEventListener('pointerup', () => { if (S.drag >= 0){ S.drag = -1; saveQuad(); } });
+
+function sample(p){
+  if (!S.last) return;
+  const ww = work.width, wh = work.height;
+  const cx = Math.round(p.x * ww / view.width), cy = Math.round(p.y * wh / view.height);
+  let sx = 0, sy = 0, ss = 0, sv = 0, n = 0;
+  for (let y = cy - 4; y <= cy + 4; y++) for (let x = cx - 4; x <= cx + 4; x++){
+    if (x < 0 || y < 0 || x >= ww || y >= wh) continue;
+    const i = y * ww + x, a = S.last.H[i] * Math.PI / 90;
+    sx += Math.cos(a); sy += Math.sin(a); ss += S.last.S[i]; sv += S.last.V[i]; n++;
+  }
+  if (!n) return;
+  let hue = Math.atan2(sy / n, sx / n) * 90 / Math.PI; if (hue < 0) hue += 180;
+  CFG.hueCenter = hue;
+  CFG.hueTol    = 16;
+  CFG.minSat    = Math.max(25, Math.round(ss / n * 0.45));
+  CFG.minVal    = Math.max(35, Math.round(sv / n * 0.35));
+  S.sampling = false; el('btnSample').setAttribute('aria-pressed', 'false');
+  S.dirty = true;
+}
+
+/* ---- controls -------------------------------------------------------- */
+el('btnSample').onclick = e => {
+  S.sampling = !S.sampling;
+  e.currentTarget.setAttribute('aria-pressed', String(S.sampling));
+  el('verdictText').textContent = S.sampling ? 'Tap a bare patch of the bin floor.' : '—';
+};
+el('btnFreeze').onclick = e => {
+  S.frozen = !S.frozen;
+  e.currentTarget.setAttribute('aria-pressed', String(S.frozen));
+  e.currentTarget.textContent = S.frozen ? 'Live' : 'Hold';
+};
+el('thr').oninput = e => {
+  CFG.threshold = +e.target.value;
+  el('thrOut').textContent = CFG.threshold + '%';
+  el('mark').style.left = CFG.threshold + '%';
+  S.streak = 0; if (S.smooth !== null) report();
+};
+el('mark').style.left = CFG.threshold + '%';
+</script>
+</body>
+</html>
